@@ -30,5 +30,3 @@ Thumbs.db
 
 # Output figures (regenerate by running scripts)
 output/
-*.png
-*.pdf
