@@ -24,10 +24,12 @@ When a HUSKY A200 rover was manually piloted around these structures to collect 
 - **Inconsistent photogrammetry pixel density** — photos taken at varying distances produced images of the same house at vastly different scales, significantly increasing post-processing effort
 - **Physical damage to the heritage site** — the rover's repeated stopping and re-orientating at waypoints left heavy tyre marks on the soft ground
 
-This project proposes two autonomous path planning algorithms that solve these problems:
+This project addresses **two data-collection objectives** — one for each sensor — with autonomous path planning:
 
-1. **LIDAR Coverage Path** — a standoff orbit that maintains a constant sensor-to-object distance and keeps the laser perpendicular to every wall face, ensuring a consistent point density of ≥ 250 pts/m² throughout
-2. **Photogrammetry Coverage Path** — an optimal set of hover positions where the camera captures each wall face perpendicularly with a consistent pixel density, connected by smooth η³ (7th-order polynomial) splines that eliminate the need for the rover to re-orient at any point
+1. **LIDAR coverage path** — a constant-standoff perimeter route that maintains a fixed sensor-to-wall distance and keeps the laser perpendicular to every wall face, ensuring a consistent point density of ≥ 250 pts/m² throughout
+2. **Photogrammetry coverage path** — an optimal set of capture positions where the rover stops perpendicular to each wall face to photograph it at a consistent pixel density, connected by smooth η³ (7th-order polynomial) splines so the rover never has to stop and spin to re-orient
+
+These two objectives are implemented across four Python modules (detailed in [Algorithms](#algorithms) below), including a trajectory-planning extension that adds a jerk-limited velocity profile to the spline path.
 
 ---
 
@@ -78,6 +80,19 @@ Kinematics: Ẋ = [v·cos θ, v·sin θ, ω]ᵀ
 
 ## Algorithms
 
+The two data-collection objectives map onto four Python modules:
+
+| # | Objective / Role | Module |
+|---|------------------|--------|
+| 1 | LIDAR optimal coverage | `sensor_coverage/lidar_coverage.py` |
+| 2 | Photogrammetry optimal coverage | `sensor_coverage/photogrammetry_basic.py`, `photogrammetry_advanced.py` |
+| 3 | Smooth traversal between capture positions | `path_planning/dynamic_path_planner.py` |
+| 4 | Jerk-limited motion (trajectory extension) | `path_planning/trajectory_planner.py` |
+
+Modules 1 and 2 solve the two core objectives; modules 3 and 4 provide the smooth η³ motion that links the photogrammetry capture positions together without damaging the heritage ground.
+
+---
+
 ### 1. LIDAR Optimal Coverage Path (`sensor_coverage/lidar_coverage.py`)
 
 **Objective:** Maintain a consistent LIDAR point density of ≥ 250 pts/m² across all faces of the building structure.
@@ -99,7 +114,7 @@ Where:
 - `resolution_H` = 0.16° (Velodyne horizontal angular resolution)
 - `resolution_V` = 1.33° (Velodyne vertical angular resolution)
 
-The algorithm uses **Shapely's polygon buffer** to generate the equidistant flight path at the computed standoff distance. The rounded corners in the output path ensure continuous sensor coverage around building edges without the rover needing to re-orient.
+The algorithm uses **Shapely's polygon buffer** to generate the equidistant drive path at the computed standoff distance. The rounded corners in the output path keep the rover at a constant distance from the wall as it rounds each building edge, preserving continuous sensor coverage.
 
 **Limitation:** For concave structures, the buffered path produces a sharp turning point requiring the rover to re-orient — manual control is recommended for those cases.
 
@@ -107,7 +122,7 @@ The algorithm uses **Shapely's polygon buffer** to generate the equidistant flig
 
 ### 2. Photogrammetry Optimal Coverage Path (`sensor_coverage/photogrammetry_basic.py` and `photogrammetry_advanced.py`)
 
-**Objective:** Compute optimal hover positions for the camera such that each building face is captured perpendicularly with a consistent pixel density.
+**Objective:** Compute optimal capture positions for the rover such that each building face is photographed perpendicularly with a consistent pixel density.
 
 **Standoff distance (camera must see full building height):**
 
@@ -133,9 +148,9 @@ Where `DH` is the wall face width and `CH` is the horizontal coverage width at t
 
 ### 3. η³ Spline Path Planning (`path_planning/dynamic_path_planner.py`)
 
-**Objective:** Connect the optimal photogrammetry positions with a smooth path that does not require the rover to stop and re-orient at any point.
+**Objective:** Link the capture positions from module 2 with a smooth path that never requires the rover to stop and spin to re-orient.
 
-A straight-line traversal between positions would require the rover to stop and spin at each waypoint — this causes tyre damage to the soft heritage ground. The η³ spline avoids this entirely.
+A straight-line traversal between positions would force the rover to halt and rotate on the spot at each waypoint — exactly the motion that damages the soft heritage ground. The η³ spline avoids this by curving smoothly through each position with a continuously defined heading. The module demonstrates this by chaining multiple η³ segments into a closed loop around a sample obstacle (see screenshot), using the same path primitive that connects real capture positions.
 
 The **η³ (eta-cubic) spline** is a 7th-order polynomial:
 
@@ -197,23 +212,25 @@ capstone-drone-survey-planning/
 
 ## Output Screenshots
 
-### Dynamic Path Planner — η³ spline loop around obstacle
-![Dynamic path planner](screenshots/1_dynamic_path_planner_1.png)
+Figures are ordered to match the [Algorithms](#algorithms) section above.
 
-### Trajectory Planner — path coloured by speed (inferno scale)
-![Trajectory coloured by speed](screenshots/2_trajectory_planner_1.png)
-
-### Trajectory Planner — velocity and angular velocity profiles
-![Velocity profiles](screenshots/2_trajectory_planner_2.png)
-
-### LIDAR Coverage Path — equidistant orbit with rounded corners
+### 1. LIDAR Coverage Path — constant-standoff perimeter with rounded corners
 ![LIDAR coverage](screenshots/3_lidar_coverage_1.png)
 
-### Photogrammetry Planner — simple rectilinear building (v1)
+### 2a. Photogrammetry Capture Positions — simple rectilinear building
 ![Photogrammetry basic](screenshots/4_photogrammetry_basic_1.png)
 
-### Photogrammetry Planner — L-shaped concave building (v2)
+### 2b. Photogrammetry Capture Positions — L-shaped concave building
 ![Photogrammetry advanced](screenshots/5_photogrammetry_advanced_1.png)
+
+### 3. η³ Spline Path — smooth multi-segment loop around an obstacle
+![Dynamic path planner](screenshots/1_dynamic_path_planner_1.png)
+
+### 4a. Trajectory — path coloured by speed (inferno scale)
+![Trajectory coloured by speed](screenshots/2_trajectory_planner_1.png)
+
+### 4b. Trajectory — linear and angular velocity profiles over time
+![Velocity profiles](screenshots/2_trajectory_planner_2.png)
 
 ---
 
@@ -234,14 +251,18 @@ pip install -r requirements.txt
 ### Run each module
 
 ```bash
-# Path planning
-python path_planning/dynamic_path_planner.py
-python path_planning/trajectory_planner.py
-
-# Sensor coverage
+# 1. LIDAR coverage
 python sensor_coverage/lidar_coverage.py
+
+# 2. Photogrammetry capture positions
 python sensor_coverage/photogrammetry_basic.py
 python sensor_coverage/photogrammetry_advanced.py
+
+# 3. η³ spline path
+python path_planning/dynamic_path_planner.py
+
+# 4. Trajectory with velocity profile
+python path_planning/trajectory_planner.py
 ```
 
 ### Regenerate screenshots
